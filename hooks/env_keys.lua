@@ -1,60 +1,11 @@
---- Configures environment variables for the installed tool
+--- Configures environment variables for the NCS toolchain
 --- Documentation: https://mise.jdx.dev/tool-plugin-development.html#envkeys-hook
 --- @param ctx {path: string, runtimeVersion: string, sdkInfo: table} Context
 --- @return table[] List of environment variable definitions
 function PLUGIN:EnvKeys(ctx)
+    local file = require("file")
     local mainPath = ctx.path
-    -- local sdkInfo = ctx.sdkInfo[PLUGIN.name]
-    -- local version = sdkInfo.version
 
-    -- Basic configuration (minimum required for most tools)
-    -- This adds the bin directory to PATH so the tool can be executed
-    return {
-        {
-            key = "PATH",
-            value = mainPath .. "/bin",
-        },
-    }
-
-    -- Example: Tool-specific environment variables
-    --[[
-    return {
-        {
-            key = "<TOOL>_HOME",
-            value = mainPath,
-        },
-        {
-            key = "PATH",
-            value = mainPath .. "/bin",
-        },
-        -- Multiple PATH entries are automatically merged
-        {
-            key = "PATH",
-            value = mainPath .. "/scripts",
-        },
-    }
-    --]]
-
-    -- Example: Library paths for compiled tools
-    --[[
-    return {
-        {
-            key = "PATH",
-            value = mainPath .. "/bin",
-        },
-        {
-            key = "LD_LIBRARY_PATH",
-            value = mainPath .. "/lib",
-        },
-        {
-            key = "PKG_CONFIG_PATH",
-            value = mainPath .. "/lib/pkgconfig",
-        },
-    }
-    --]]
-
-    -- Example: Platform-specific configuration
-    --[[
     local env_vars = {
         {
             key = "PATH",
@@ -62,20 +13,25 @@ function PLUGIN:EnvKeys(ctx)
         },
     }
 
-    -- RUNTIME object is provided by mise/vfox
-    if RUNTIME.osType == "Darwin" then
+    -- Add arm-zephyr-eabi cross-compiler tools to PATH
+    -- (symlink created by PostInstall pointing to the actual bin directory)
+    local arm_bin_link = mainPath .. "/arm-zephyr-eabi-bin"
+    if file.exists(arm_bin_link) then
         table.insert(env_vars, {
-            key = "DYLD_LIBRARY_PATH",
-            value = mainPath .. "/lib",
-        })
-    elseif RUNTIME.osType == "Linux" then
-        table.insert(env_vars, {
-            key = "LD_LIBRARY_PATH",
-            value = mainPath .. "/lib",
+            key = "PATH",
+            value = arm_bin_link,
         })
     end
-    -- Windows doesn't use these library path variables
+
+    table.insert(env_vars, {
+        key = "ZEPHYR_TOOLCHAIN_VARIANT",
+        value = "zephyr",
+    })
+
+    table.insert(env_vars, {
+        key = "ZEPHYR_SDK_INSTALL_DIR",
+        value = mainPath .. "/opt/zephyr-sdk",
+    })
 
     return env_vars
-    --]]
 end
