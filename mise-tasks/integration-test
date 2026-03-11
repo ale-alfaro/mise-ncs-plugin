@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#MISE description="Integration test - build a Zephyr sample with the NCS toolchain"
+#MISE dir="{{config_root}}"
+#USAGE arg "[ncs_version]" help="NCS version to test with" default="v2.7.0" env="NCS_TEST_VERSION"
+
+# ── Create temp workspace with cleanup ─────────────────────────────
+WORKSPACE=$(mktemp -d)
+APPDIR="${WORKSPACE?}/app"
+echo "Workspace: $WORKSPACE"
+mkdir "${APPDIR?}"
+cleanup() {
+    echo "Cleanup!"
+    mise plugin remove ncs-toolchain
+    mise cache clear
+    rm -rf "$WORKSPACE"
+}
+trap cleanup exit
+NCS_VERSION="${usage_ncs_version:?}"
+
+pushd "${APPDIR}"
+# ── Install toolchain ──────────────────────────────────────────────
+# Link your plugin for development
+mise plugin link --force ncs-toolchain "${MISE_CONFIG_ROOT:?}"
+# Test listing versions
+mise ls-remote ncs-toolchain
+# Test installation
+mise --debug install "ncs-toolchain@${NCS_VERSION}"
+mise use "ncs-toolchain@${NCS_VERSION}"
+mise env
+arm-zephyr-eabi-gcc --version
+# ── Write minimal west manifest ────────────────────────────────────
+cat >"${APPDIR}/west.yml" <<YAML
+manifest:
+  remotes:
+    - name: ncs
+      url-base: https://github.com/nrfconnect
+
+  projects:
+    - name: sdk-nrf
+      remote: ncs
+      path: nrf
+      revision: ${NCS_VERSION}
+      clone-depth: 1
+      import:
+        name-allowlist:
+          - zephyr
+          - cmsis
+          - hal_nordic
+          - nrfxlib
+
+  self:
+    path: app
+YAML
+
+# ── Setup west, python and dependencies ──────────────────────────────────────────────
+mise use uv
+PYTHON_VERSION=$(mise env --json | jq -r '.NCS_PYTHON_VERSION')
+mise use "python@${PYTHON_VERSION}"
+mise use pipx:west
+mise use ninja
+# ── West init & update ─────────────────────────────────────────────
+west init -l .
+WEST_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/ncs-plugin-test/west"
+mkdir -p "${WEST_CACHE}"
+west update -o=--depth=1 --narrow --auto-cache "${WEST_CACHE}"
+mise set ZEPHRY_BASE="${WORKSPACE}/zephyr"
+mise settings add python.uv_venv_auto "create|source"
+uv init --bare --no-package --python="${PYTHON_VERSION}" --pin-python
+uv add --dev \
+    -r "${WORKSPACE:?}/zephyr/scripts/requirements-base.txt" \
+    -r "${WORKSPACE:?}/zephyr/scripts/requirements-extras.txt" \
+    -r "${WORKSPACE:?}/nrf/scripts/requirements.txt"
+
+mise prep
+# ── Build hello_world sample ───────────────────────────────────────
+mise exec -c "west build -p -b nrf52840dk_nrf52840 ${WORKSPACE}/zephyr/samples/hello_world"
+popd
+
+# ── Verify output ──────────────────────────────────────────────────
+if [[ -d "${APPDIR}/build" && -e "${APPDIR}/build/merged.hex" ]]; then
+    echo "Integration test passed: zephyr.elf built successfully"
+else
+    echo "Integration test failed: build/zephyr/zephyr.elf not found"
+    exit 1
+fi

@@ -4,6 +4,7 @@ MISE_USE_VERSIONS_HOST = "0"
 [tools]
 actionlint = "latest"
 hk = "latest"
+jq = "latest"
 lua = "5.4"
 lua-language-server = "latest"
 pkl = "latest"
@@ -23,4 +24,4 @@ run = "hk fix"
 
 [tasks.ci]
 description = "Run all CI checks"
-depends = ["lint", "test"]
+depends = ["lint", "smoke-test", "integration-test"]

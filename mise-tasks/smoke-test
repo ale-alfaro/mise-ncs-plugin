@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #MISE description="Run plugin tests - install and verify NCS toolchain"
+#USAGE arg "[ncs_version]" help="NCS version to test with" default="v2.7.0" env="NCS_TEST_VERSION"
 set -euo pipefail
 
+NCS_VERSION="${usage_ncs_version:?}"
 mise plugin link --force ncs-toolchain .
 mise cache clear
-mise install ncs-toolchain@v2.9.0
+mise install "ncs-toolchain@${NCS_VERSION}"
 
 # Verify arm-zephyr-eabi-gcc is available via the toolchain
-output=$(mise exec "ncs-toolchain@v2.9.0" -- arm-zephyr-eabi-gcc --version 2>&1 || true)
+output=$(mise exec "ncs-toolchain@v${NCS_VERSION}" -- arm-zephyr-eabi-gcc --version 2>&1 || true)
 echo "arm-zephyr-eabi-gcc output: $output"
 
 if echo "$output" | grep -qi 'gcc'; then

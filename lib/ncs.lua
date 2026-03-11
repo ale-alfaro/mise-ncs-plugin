@@ -13,6 +13,7 @@ function M.get_platform()
     return os_map[os_type] or os_type, arch_map[arch_type] or arch_type
 end
 
+---@return NCSVersionData[]
 function M.fetch_index()
     local os_name, arch = M.get_platform()
     local index_url = BASE_URL .. "index-" .. os_name .. "-" .. arch .. ".json"
@@ -27,8 +28,9 @@ function M.fetch_index()
 
     return json.decode(resp.body)
 end
-
-function M.get_download_info(version)
+---@param version string
+---@return NCSVersion
+function M.find_version(version)
     local entries = M.fetch_index()
 
     for _, entry in ipairs(entries) do
@@ -38,12 +40,6 @@ function M.get_download_info(version)
             entry_version = entry.key
             filename = entry.metadata.filename
             sha512 = entry.metadata.sha512
-        else
-            entry_version = entry.version
-            if entry.toolchains and #entry.toolchains > 0 then
-                filename = entry.toolchains[1].name
-                sha512 = entry.toolchains[1].sha512
-            end
         end
 
         if entry_version == version and filename then
@@ -59,4 +55,18 @@ function M.get_download_info(version)
     error("NCS toolchain version " .. version .. " not found for " .. os_name .. "-" .. arch)
 end
 
+---@param bin_path string
+---@param bins string[]
+function M.remove_from_bin_path(bin_path, bins)
+    local cmd = require("cmd")
+    for _, bin in ipairs(bins) do
+        local ok, ret = pcall(function()
+            return cmd.exec("rm -f " .. bin, { cwd = bin_path })
+        end)
+
+        if not ok then
+            error("Failed to remove " .. bin .. "binaries from the bin path " .. bin_path .. "ret=" .. ret)
+        end
+    end
+end
 return M
