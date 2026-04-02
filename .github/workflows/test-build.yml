@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - run: mise run lint
 
   smoke-test:
@@ -24,9 +24,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+        with:
+          experimental: true
       - name: Cache nrfutil and subcommands
         uses: actions/cache@v4
         with:
@@ -50,9 +51,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+        with:
+          experimental: true
       - name: Cache nrfutil and subcommands
         uses: actions/cache@v4
         with:
