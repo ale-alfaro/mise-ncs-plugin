@@ -2,13 +2,34 @@ local M = {}
 
 M.MIN_VERSION = "2.7.0"
 
---- nrfutil download URLs keyed by platform
+local ARTIFACTORY_BASE_URL = "https://files.nordicsemi.com/artifactory"
+local NRFUTIL_BASE_URL = ARTIFACTORY_BASE_URL .. "/swtools/external/nrfutil"
+local PACKAGE_INDEX_URL = NRFUTIL_BASE_URL .. "/index/init.json"
+local PACKAGE_INDEX_NAME = "nordic-external-production"
+
+--- nrfutil executable download URLs keyed by platform
 ---@type table<string, string>
 local NRFUTIL_URLS = {
-    ["darwin"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/universal-apple-darwin/nrfutil",
-    ["linux-amd64"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil",
-    ["windows-amd64"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-pc-windows-msvc/nrfutil.exe",
+    ["darwin"] = NRFUTIL_BASE_URL .. "/executables/universal-apple-darwin/nrfutil",
+    ["linux-amd64"] = NRFUTIL_BASE_URL .. "/executables/x86_64-unknown-linux-gnu/nrfutil",
+    ["windows-amd64"] = NRFUTIL_BASE_URL .. "/executables/x86_64-pc-windows-msvc/nrfutil.exe",
 }
+
+--- Builds the toolchain index URL for the current platform.
+--- This is the same NCS bundle index the old plugin fetched directly.
+---@return string
+function M.get_toolchain_index_url()
+    local os_name = RUNTIME.osType:lower()
+    local arch = RUNTIME.archType
+
+    local os_map = { linux = "linux", darwin = "macos" }
+    local arch_map = { amd64 = "x86_64", arm64 = "aarch64", x86_64 = "x86_64", aarch64 = "aarch64" }
+
+    local mapped_os = os_map[os_name] or os_name
+    local mapped_arch = arch_map[arch] or arch
+
+    return "https://files.nordicsemi.com/NCS/external/bundles/v3/index-" .. mapped_os .. "-" .. mapped_arch .. ".json"
+end
 
 --- Returns the nrfutil download URL for the current platform
 ---@return string
@@ -37,7 +58,18 @@ function M.get_nrfutil_path()
     return file.join_path(RUNTIME.pluginDirPath, bin_name)
 end
 
---- Downloads nrfutil if not present and installs the toolchain-manager subcommand.
+--- Removes stale nrfutil-core binary so the launcher re-bootstraps.
+--- Mirrors the cleanup step from Nordic's bootstrap-toolchain.sh.
+local function cleanup_stale_nrfutil_core()
+    local os_name = RUNTIME.osType:lower()
+    local home = os_name == "windows" and os.getenv("USERPROFILE") or os.getenv("HOME")
+    if home then
+        os.remove(home .. "/.nrfutil/bin/nrfutil")
+    end
+end
+
+--- Downloads nrfutil if not present, configures the package index,
+--- and installs the toolchain-manager subcommand.
 ---@return string nrfutil_path Absolute path to the nrfutil binary
 function M.ensure_nrfutil()
     local file = require("file")
@@ -58,14 +90,22 @@ function M.ensure_nrfutil()
         if RUNTIME.osType:lower() ~= "windows" then
             cmd.exec("chmod +x " .. nrfutil)
         end
+
+        cleanup_stale_nrfutil_core()
     end
 
-    -- Install/update the toolchain-manager subcommand (idempotent)
+    -- Configure the package index (idempotent: remove then re-add)
+    pcall(cmd.exec, nrfutil .. " config package-index remove " .. PACKAGE_INDEX_NAME)
+    cmd.exec(nrfutil .. " config package-index add " .. PACKAGE_INDEX_NAME .. " " .. PACKAGE_INDEX_URL)
+
+    -- Install toolchain-manager via the configured index
     log.info("Ensuring nrfutil toolchain-manager is installed...")
-    local ok, err = pcall(cmd.exec, nrfutil .. " install toolchain-manager")
-    if not ok then
-        log.warn("toolchain-manager install note: " .. tostring(err))
-    end
+    cmd.exec(nrfutil .. " install --force --package-index-name " .. PACKAGE_INDEX_NAME .. " toolchain-manager")
+
+    -- Point toolchain-manager at the platform-specific NCS bundle index
+    local tc_index = M.get_toolchain_index_url()
+    log.info("Setting toolchain index: " .. tc_index)
+    cmd.exec(nrfutil .. " toolchain-manager config --set toolchain-index=" .. tc_index)
 
     return nrfutil
 end
@@ -127,7 +167,7 @@ function M.get_env_vars(version, install_path)
     local strings = require("strings")
     local log = require("log")
 
-    local nrfutil = M.ensure_nrfutil()
+    local nrfutil = M.get_nrfutil_path()
     local version_arg = "v" .. version:gsub("^v", "")
 
     local env_cmd = nrfutil
