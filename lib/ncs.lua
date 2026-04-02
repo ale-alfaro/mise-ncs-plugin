@@ -1,72 +1,207 @@
-local http = require("http")
-local json = require("json")
-
 local M = {}
 
-local BASE_URL = "https://files.nordicsemi.com/artifactory/NCS/external/bundles/v3/"
+M.MIN_VERSION = "2.7.0"
 
-function M.get_platform()
-    local os_type = RUNTIME.osType
-    local arch_type = RUNTIME.archType
-    local os_map = { linux = "linux", darwin = "macos" }
-    local arch_map = { amd64 = "x86_64", arm64 = "aarch64", x86_64 = "x86_64", aarch64 = "aarch64" }
-    return os_map[os_type] or os_type, arch_map[arch_type] or arch_type
-end
+--- nrfutil download URLs keyed by platform
+---@type table<string, string>
+local NRFUTIL_URLS = {
+    ["darwin"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/universal-apple-darwin/nrfutil",
+    ["linux-amd64"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil",
+    ["windows-amd64"] = "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-pc-windows-msvc/nrfutil.exe",
+}
 
----@return NCSVersionData[]
-function M.fetch_index()
-    local os_name, arch = M.get_platform()
-    local index_url = BASE_URL .. "index-" .. os_name .. "-" .. arch .. ".json"
+--- Returns the nrfutil download URL for the current platform
+---@return string
+function M.get_nrfutil_url()
+    local os_name = RUNTIME.osType:lower()
+    local arch = RUNTIME.archType
 
-    local resp, err = http.get({ url = index_url })
-    if err ~= nil then
-        error("Failed to fetch NCS toolchain index: " .. err)
-    end
-    if resp.status_code ~= 200 then
-        error("NCS index returned status " .. resp.status_code .. ": " .. resp.body)
+    -- macOS uses a universal binary
+    if os_name == "darwin" then
+        return NRFUTIL_URLS["darwin"]
     end
 
-    return json.decode(resp.body)
-end
----@param version string
----@return NCSVersion
-function M.find_version(version)
-    local entries = M.fetch_index()
-
-    for _, entry in ipairs(entries) do
-        local entry_version, filename, sha512
-
-        if entry.json_api_version == 2 then
-            entry_version = entry.key
-            filename = entry.metadata.filename
-            sha512 = entry.metadata.sha512
-        end
-
-        if entry_version == version and filename then
-            return {
-                version = version,
-                url = BASE_URL .. filename,
-                sha512 = sha512,
-            }
-        end
+    local key = os_name .. "-" .. arch
+    local url = NRFUTIL_URLS[key]
+    if not url then
+        error("Unsupported platform for nrfutil: " .. key)
     end
-
-    local os_name, arch = M.get_platform()
-    error("NCS toolchain version " .. version .. " not found for " .. os_name .. "-" .. arch)
+    return url
 end
 
----@param bin_path string
----@param bins string[]
-function M.remove_from_bin_path(bin_path, bins)
+--- Returns the path where nrfutil is stored (inside the plugin directory)
+---@return string
+function M.get_nrfutil_path()
+    local file = require("file")
+    local bin_name = RUNTIME.osType:lower() == "windows" and "nrfutil.exe" or "nrfutil"
+    return file.join_path(RUNTIME.pluginDirPath, bin_name)
+end
+
+--- Downloads nrfutil if not present and installs the toolchain-manager subcommand.
+---@return string nrfutil_path Absolute path to the nrfutil binary
+function M.ensure_nrfutil()
+    local file = require("file")
+    local http = require("http")
     local cmd = require("cmd")
-    for _, bin in ipairs(bins) do
-        local ok, ret = pcall(function()
-            return cmd.exec("rm -f " .. bin, { cwd = bin_path })
-        end)
+    local log = require("log")
 
-        if not ok then
-            error("Failed to remove " .. bin .. "binaries from the bin path " .. bin_path .. "ret=" .. ret)
+    local nrfutil = M.get_nrfutil_path()
+
+    if not file.exists(nrfutil) then
+        local url = M.get_nrfutil_url()
+        log.info("Downloading nrfutil from " .. url)
+        local err = http.download_file({ url = url }, nrfutil)
+        if err ~= nil then
+            error("Failed to download nrfutil: " .. err)
+        end
+
+        if RUNTIME.osType:lower() ~= "windows" then
+            cmd.exec("chmod +x " .. nrfutil)
         end
     end
+
+    -- Install/update the toolchain-manager subcommand (idempotent)
+    log.info("Ensuring nrfutil toolchain-manager is installed...")
+    local ok, err = pcall(cmd.exec, nrfutil .. " install toolchain-manager")
+    if not ok then
+        log.warn("toolchain-manager install note: " .. tostring(err))
+    end
+
+    return nrfutil
 end
+
+--- Searches available NCS toolchain versions via nrfutil toolchain-manager.
+--- Parses version strings from the search output and filters by MIN_VERSION.
+---@return string[] versions Sorted list of version strings (without "v" prefix)
+function M.search_versions()
+    local cmd = require("cmd")
+    local strings = require("strings")
+    local semver = require("semver")
+
+    local nrfutil = M.ensure_nrfutil()
+    local output = cmd.exec(nrfutil .. " toolchain-manager search")
+
+    local versions = {}
+    local lines = strings.split(output, "\n")
+    for _, line in ipairs(lines) do
+        local ver = line:match("(v?%d+%.%d+%.%d+[%w%-%.]*)")
+        if ver then
+            local clean = ver:gsub("^v", "")
+            if semver.compare(clean, M.MIN_VERSION) >= 0 then
+                table.insert(versions, clean)
+            end
+        end
+    end
+
+    return versions
+end
+
+--- Installs an NCS toolchain version into the given directory.
+---@param version string NCS version (e.g. "2.7.0")
+---@param install_path string Directory to install into
+function M.install_toolchain(version, install_path)
+    local cmd = require("cmd")
+    local log = require("log")
+
+    local nrfutil = M.ensure_nrfutil()
+    local version_arg = "v" .. version:gsub("^v", "")
+
+    local install_cmd = nrfutil
+        .. " toolchain-manager install"
+        .. " --ncs-version "
+        .. version_arg
+        .. " --install-dir "
+        .. install_path
+
+    log.info("Installing NCS toolchain " .. version_arg .. " to " .. install_path)
+    cmd.exec(install_cmd)
+end
+
+--- Retrieves environment variables for an installed NCS toolchain.
+--- Parses the output of `nrfutil toolchain-manager env` for export lines.
+---@param version string NCS version
+---@param install_path string Installation directory
+---@return table[] env_vars Array of {key, value} tables
+function M.get_env_vars(version, install_path)
+    local cmd = require("cmd")
+    local strings = require("strings")
+    local log = require("log")
+
+    local nrfutil = M.ensure_nrfutil()
+    local version_arg = "v" .. version:gsub("^v", "")
+
+    local env_cmd = nrfutil
+        .. " toolchain-manager env"
+        .. " --ncs-version "
+        .. version_arg
+        .. " --install-dir "
+        .. install_path
+        .. " --as-script"
+
+    local ok, output = pcall(cmd.exec, env_cmd)
+    if not ok then
+        log.warn("nrfutil toolchain-manager env failed, falling back to manual env construction")
+        return M.build_env_vars_manual(install_path)
+    end
+
+    local env_vars = {}
+    local lines = strings.split(output, "\n")
+    for _, line in ipairs(lines) do
+        -- Parse "export KEY=VALUE" or "export KEY=\"VALUE\""
+        local key, value = line:match('^export%s+([%w_]+)="?(.-)"?$')
+        if key and value then
+            -- For PATH, split on ":" and add each entry separately
+            if key == "PATH" then
+                local parts = strings.split(value, ":")
+                for _, p in ipairs(parts) do
+                    local trimmed = strings.trim_space(p)
+                    if trimmed ~= "" and trimmed ~= "$PATH" then
+                        table.insert(env_vars, { key = "PATH", value = trimmed })
+                    end
+                end
+            else
+                table.insert(env_vars, { key = key, value = value })
+            end
+        end
+    end
+
+    if #env_vars == 0 then
+        log.warn("No env vars parsed from nrfutil output, using manual fallback")
+        return M.build_env_vars_manual(install_path)
+    end
+
+    return env_vars
+end
+
+--- Fallback: construct env vars from known NCS toolchain directory layout.
+---@param install_path string Installation directory
+---@return table[] env_vars Array of {key, value} tables
+function M.build_env_vars_manual(install_path)
+    local file = require("file")
+    local log = require("log")
+
+    local env_vars = {}
+    local usr_bin = file.join_path(install_path, "usr", "local", "bin")
+    local usr_lib = file.join_path(install_path, "usr", "local", "lib")
+    local sdk_dir = file.join_path(install_path, "opt", "zephyr-sdk")
+    local sdk_bin = file.join_path(sdk_dir, "arm-zephyr-eabi", "bin")
+
+    if file.exists(usr_bin) then
+        table.insert(env_vars, { key = "PATH", value = usr_bin })
+    end
+    if file.exists(sdk_bin) then
+        table.insert(env_vars, { key = "PATH", value = sdk_bin })
+    end
+    if file.exists(usr_lib) then
+        table.insert(env_vars, { key = "LD_LIBRARY_PATH", value = usr_lib })
+    end
+    if file.exists(sdk_dir) then
+        table.insert(env_vars, { key = "ZEPHYR_TOOLCHAIN_VARIANT", value = "zephyr" })
+        table.insert(env_vars, { key = "ZEPHYR_SDK_INSTALL_DIR", value = sdk_dir })
+    end
+
+    log.debug("Built manual env vars for NCS toolchain at " .. install_path)
+    return env_vars
+end
+
 return M
