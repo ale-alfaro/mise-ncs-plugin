@@ -45,7 +45,7 @@ if mise install "ncs-test:toolchain@${NCS_VERSION}" 2>/dev/null; then
 
   for tool in "${TEST_TOOLS[@]}"; do
     echo "Testing tool: ${tool}"
-    if mise exec "ncs-test:nrfutil@${NRFUTIL_VERSION}" "ncs-test:toolchain@${NCS_VERSION}" -- "${tool:?}" --version 2>/dev/null; then
+    if mise exec "ncs-test:toolchain@${NCS_VERSION}" -- "${tool:?}" --version 2>/dev/null; then
       echo "✓ Tool execution works: ${tool}"
     else
       echo "⚠ Tool execution failed: ${tool} - check backend_exec_env.lua implementation"
