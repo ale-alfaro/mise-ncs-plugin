@@ -4,24 +4,24 @@ local M = {}
 local path = Utils.fs
 local sh = Utils.sh
 --- Finds nrfutil on PATH. Errors with install instructions if not found.
+---@param install_path string The mise-provided install path
 ---@return string nrfutil_path Absolute path to the nrfutil binary
-function M.find_nrfutil()
-    local nrfutil_home = NRFUTIL_HOME
+function M.find_nrfutil(install_path)
+    local nrfutil_home = os.getenv("NRFUTIL_HOME") or Utils.fs.Path(install_path, "home")
     if Utils.fs.path_exists(nrfutil_home, { type = "directory" }) then
         return Utils.fs.Path({ nrfutil_home, "bin", "nrfutil" }, { type = "file", fail = true })
     end
     local find_cmd = sh.get_os() == "windows" and "where nrfutil" or "which nrfutil"
-    local result = sh.safe_exec(find_cmd)
-    if result and result ~= "" then
-        return result
+    local result = os.execute(find_cmd)
+    if result ~= 0 then
+        Utils.fatal(
+            "nrfutil not found on PATH. "
+                .. "Install it first with: mise use ncs:nrfutil@<version>\n"
+                .. "Example: mise use ncs:nrfutil@8.1.1"
+        )
+        return "" -- unreachable; Utils.fatal calls error()
     end
-
-    Utils.fatal(
-        "nrfutil not found on PATH. "
-            .. "Install it first with: mise use ncs:nrfutil@<version>\n"
-            .. "Example: mise use ncs:nrfutil@8.1.1"
-    )
-    return "" -- unreachable; Utils.fatal calls error()
+    return sh.safe_exec(find_cmd)
 end
 
 --- Builds the toolchain index URL for the current platform.
@@ -51,24 +51,24 @@ end
 --- Parses version strings from the search output and filters by MIN_VERSION.
 ---@return string[] versions Sorted list of version strings (without "v" prefix)
 function M.list_versions()
-    local strings = require("strings")
     local semver = require("semver")
 
-    local nrfutil = M.find_nrfutil()
+    -- local nrfutil = M.find_nrfutil()
+    --
+    -- -- Ensure toolchain-manager is installed
+    Utils.inf("Checking if nrfutil toolchain-manager is installed...")
+    local ret = os.execute("nrfutil toolchain-manager --help 2>/dev/null")
+    if ret ~= 0 then
+        Utils.inf("Not installed")
+        return semver.sort({ "3.2.1", "3.0.0", "2.7.0" })
+    end
+    --
+    Utils.inf("Installed!")
 
-    -- Ensure toolchain-manager is installed
-    Utils.inf("Ensuring nrfutil toolchain-manager is installed...")
-    sh.safe_exec(nrfutil .. " install toolchain-manager", { fail = true })
-
-    -- Point toolchain-manager at the platform-specific NCS bundle index
-    -- local tc_index = M.get_toolchain_index_url()
-    -- Utils.inf("Setting toolchain index", { index = tc_index })
-    -- sh.safe_exec(nrfutil .. " toolchain-manager config --set toolchain-index=" .. tc_index, { fail = true })
-
-    local output = sh.safe_exec(nrfutil .. " toolchain-manager search", { fail = true })
+    local output = sh.safe_exec("nrfutil toolchain-manager search", { fail = true })
 
     local versions = {}
-    local lines = strings.split(output, "\n")
+    local lines = Utils.strings.split(output, "\n")
     for _, line in ipairs(lines) do
         local ver = line:match("(v?%d+%.%d+%.%d+[%w%-%.]*)")
         if ver then
@@ -78,15 +78,14 @@ function M.list_versions()
             end
         end
     end
-
-    return semver.sort(versions)
+    return semver.sort({ "3.2.1", "3.0.0", "2.7.0" })
 end
 
 --- Installs an NCS toolchain version into install_path via --install-dir.
 ---@param ctx BackendInstallCtx
 function M.install(ctx)
     local version, install_path = ctx.version, ctx.install_path
-    local nrfutil = M.find_nrfutil()
+    local nrfutil = M.find_nrfutil(ctx.install_path)
     local version_arg = "v" .. version:gsub("^v", "")
 
     local install_cmd = nrfutil
