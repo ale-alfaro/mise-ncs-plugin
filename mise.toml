@@ -48,7 +48,7 @@ arg "<ncs_version>" help="NCS Version" {
 }
 '''
 run = '''
-mise run smoke-test ncs-test ${usage_ncs_version?} "{{config_root}}/tests/tool_cmds.txt"
+BACKEND=ncs-test BACKEND_VERSION="${usage_ncs_version:?}" mise run smoke-test
 '''
 
 [tasks.ci]
@@ -60,6 +60,5 @@ arg "<ncs_version>" help="NCS Version" {
 }
 '''
 run = '''
-WORKSPACE=$(mktemp -d)
-mise run integration-test "${WORKSPACE?}" "${usage_ncs_version?}"
+BACKEND=ncs-test BACKEND_VERSION="${usage_ncs_version:?}" mise run integration-test
 '''

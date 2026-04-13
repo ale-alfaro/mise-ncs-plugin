@@ -7,13 +7,16 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
-  integration-test:
+  smoke-test:
     strategy:
       fail-fast: false
       matrix:
-        ncs_version: ["2.7.0", "3.0.2", "3.2.1"]
+        version: ["2.7.0", "3.0.2", "3.2.1"]
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      BACKEND: ncs-test
+      BACKEND_VERSION: ${{ matrix.version }}
     steps:
       - uses: actions/checkout@v6
       - uses: jdx/mise-action@v4
@@ -28,5 +31,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/mise/installs/ncs-toolchain
-          key: ncs-toolchain-${{ runner.os }}-${{ matrix.ncs_version }}
-      - run: mise run ci ${{ matrix.ncs_version }}
+          key: ncs-toolchain-${{ runner.os }}-${{ matrix.version }}
+      - name: Bootstrap nrfutil (needed by toolchain/west version listing)
+        run: |
+          mise plugins link --force "${BACKEND}" .
+          mise install "${BACKEND}:nrfutil@8.1.1"
+          mise use -g "${BACKEND}:nrfutil@8.1.1"
+      - run: mise run smoke-test
+      - run: mise run integration-test
