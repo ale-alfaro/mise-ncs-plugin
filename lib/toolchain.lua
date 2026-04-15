@@ -89,8 +89,6 @@ local function read_bundle_info()
     end
     return decoded
 end
----@alias BundleCache table<string, ToolchainBundle>
-BundleCache = {}
 
 function M.list_versions()
     local bundles = get_toolchain_bundle_index()
@@ -98,16 +96,15 @@ function M.list_versions()
         return {}
     end
     local versions = {}
+    local cache = {}
     for _, bundle in ipairs(bundles) do
-        BundleCache[bundle.version] = bundle
+        cache[bundle.version] = bundle
         versions[#versions + 1] = bundle.version
     end
 
-    store_bundle_info(BundleCache)
+    store_bundle_info(cache)
     Utils.inf("Bundles", { bundles = bundles })
-    return {
-        versions = versions,
-    }
+    return versions
 end
 --- Installs a specific version of nrfutil (launcher + pinned core module).
 --- Layout: install_path/bin/nrfutil, install_path/home/, install_path/download/
@@ -118,13 +115,13 @@ function M.install(version, install_path, download_path)
     local bundles = read_bundle_info()
 
     if not bundles then
-        Utils.err("Could not get bundle cache", { version = version, cache = BundleCache })
+        Utils.err("Could not get bundle cache", { version = version })
         return nil
     end
 
     local bundle = bundles[version]
     if not bundle then
-        Utils.err("Could not find bundle in cache", { version = version, cache = BundleCache })
+        Utils.err("Could not find bundle in cache", { version = version })
         return nil
     end
     -- 1. Download the launcher executable

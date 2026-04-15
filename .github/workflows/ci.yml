@@ -32,12 +32,12 @@ jobs:
             run = '''
             echo "Link!"
             mise plugins ln "${BACKEND:?}" .
-            echo "Install!"
-            mise  install "${BACKEND}:toolchain@${BACKEND_VERSION:?}"
-            mise  install "${BACKEND}:west@${BACKEND_VERSION}"
             echo "ls-remote!"
             mise ls-remote "${BACKEND}:toolchain@${BACKEND_VERSION}"
             mise ls-remote "${BACKEND}:west@${BACKEND_VERSION}"
+            echo "Install!"
+            mise use -g "${BACKEND}:toolchain@${BACKEND_VERSION:?}"
+            mise use -g "${BACKEND}:west@${BACKEND_VERSION}"
             echo "Exec!"
             mise x  -- arm-zephyr-eabi-gcc --version
             mise x  -- west --version

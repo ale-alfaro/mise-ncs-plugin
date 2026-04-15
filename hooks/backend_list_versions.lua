@@ -29,5 +29,5 @@ function PLUGIN:BackendListVersions(ctx)
     if not NCS[ctx.tool] then
         return {}
     end
-    return get_releases(NCS[ctx.tool].list_versions)
+    return { versions = get_releases(NCS[ctx.tool].list_versions) }
 end
